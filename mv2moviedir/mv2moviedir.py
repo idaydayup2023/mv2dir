@@ -512,7 +512,7 @@ def create_target_directory(base_dir, filename_without_ext, year=None, year_grou
 
 def can_remove_directory(directory):
     """
-    检查目录是否可以删除（为空或只包含被忽略的文件类型）
+    检查目录是否可以删除（为空或只包含被忽略的文件类型和可删除的子目录）
     
     Args:
         directory: 目录路径
@@ -524,73 +524,186 @@ def can_remove_directory(directory):
     if not os.path.exists(directory) or not os.path.isdir(directory):
         return False
     
-    # 获取目录中的所有文件
-    files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
-    
-    # 如果目录为空，可以删除
-    if not files:
+    try:
+        # 获取目录中的所有内容
+        items = os.listdir(directory)
+        
+        # 如果目录为空，可以删除
+        if not items:
+            return True
+        
+        # 检查每个项目
+        for item in items:
+            item_path = os.path.join(directory, item)
+            
+            if os.path.isfile(item_path):
+                # 检查文件扩展名
+                _, ext = os.path.splitext(item)
+                if ext.lower() not in IGNORED_EXTENSIONS:
+                    return False
+            elif os.path.isdir(item_path):
+                # 递归检查子目录
+                if not can_remove_directory(item_path):
+                    return False
+        
         return True
-    
-    # 检查是否只包含被忽略的文件类型
-    for file in files:
-        _, ext = os.path.splitext(file)
-        if ext.lower() not in IGNORED_EXTENSIONS:
-            return False
-    
-    return True
+        
+    except (OSError, PermissionError) as e:
+        logging.warning(f"检查目录时出错: {directory}, 错误: {e}")
+        return False
 
 
-def move_file(source_path, target_dir, override_files=True):
+def move_file(source_file, target_dir, override_files=True, dry_run=False):
     """
-    将文件移动到目标目录
+    移动文件到目标目录
     
     Args:
-        source_path: 源文件路径
-        target_dir: 目标目录
-        override_files: 是否覆盖已存在的文件，默认为True
+        source_file: 源文件路径
+        target_dir: 目标目录路径
+        override_files: 是否覆盖已存在的文件
+        dry_run: 是否为预览模式，只显示操作不实际执行
         
     Returns:
         bool: 是否成功移动文件
     """
-    filename = os.path.basename(source_path)
-    
-    # 特殊处理复合扩展名（如.ai.srt）
-    if filename.endswith('.ai.srt'):
-        filename_without_ext = filename[:-7]  # 去掉 .ai.srt
-        ext = '.ai.srt'
-    else:
-        # 获取文件扩展名
-        filename_without_ext, ext = os.path.splitext(filename)
-    
-    # 先去除中文广告内容，再标准化文件名（不含扩展名），与目录名处理保持一致
-    cleaned_filename_without_ext = remove_chinese_ads(filename_without_ext)
-    normalized_filename_without_ext = normalize_name(cleaned_filename_without_ext)
-    
-    # 重新组合文件名
-    normalized_filename = normalized_filename_without_ext + ext
-    
-    target_path = os.path.join(target_dir, normalized_filename)
-    
-    # 检查目标文件是否已存在
-    if os.path.exists(target_path):
-        if not override_files:
-            logging.warning(f"目标文件已存在，跳过: {target_path}")
+    try:
+        if not os.path.exists(source_file):
+            logging.warning(f"源文件不存在: {source_file}")
             return False
-        else:
-            logging.info(f"目标文件已存在，将覆盖: {target_path}")
+            
+        original_filename = os.path.basename(source_file)
+        
+        # 获取文件扩展名
+        filename_without_ext, ext = os.path.splitext(original_filename)
+        
+        # 清理文件名：去除中文广告内容，然后标准化名称
+        cleaned_filename = remove_chinese_ads(filename_without_ext)
+        normalized_filename = normalize_name(cleaned_filename)
+        
+        # 重新组合文件名和扩展名
+        clean_filename = normalized_filename + ext
+        
+        target_file = os.path.join(target_dir, clean_filename)
+        
+        if dry_run:
+            # 预览模式：只显示将要执行的操作
+            if not os.path.exists(target_dir):
+                logging.info(f"[预览] 将创建目录: {target_dir}")
+            
+            # 显示文件名清理信息
+            if original_filename != clean_filename:
+                logging.info(f"[预览] 将清理文件名: {original_filename} -> {clean_filename}")
+            
+            if os.path.exists(target_file):
+                if not override_files:
+                    logging.warning(f"[预览] 目标文件已存在，将跳过: {target_file}")
+                    return False
+                else:
+                    logging.info(f"[预览] 将覆盖已存在的文件: {target_file}")
+            
+            logging.info(f"[预览] 将移动文件: {source_file} -> {target_file}")
+            return True
+        
+        # 实际执行模式
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir, exist_ok=True)
+        
+        # 显示文件名清理信息
+        if original_filename != clean_filename:
+            logging.info(f"清理文件名: {original_filename} -> {clean_filename}")
+            
+        if os.path.exists(target_file):
+            if not override_files:
+                logging.warning(f"目标文件已存在，跳过: {target_file}")
+                return False
+            else:
+                logging.info(f"覆盖已存在的文件: {target_file}")
+        
+        shutil.move(source_file, target_file)
+        logging.info(f"移动文件: {source_file} -> {target_file}")
+        return True
+        
+    except (OSError, PermissionError) as e:
+        logging.error(f"移动文件失败: {source_file} -> {target_dir}, 错误: {e}")
+        return False
+
+
+def remove_empty_directories(directory, preserve_root=True, dry_run=False):
+    """
+    递归删除空目录和只包含垃圾文件的目录
+    
+    Args:
+        directory: 要检查的目录路径
+        preserve_root: 是否保留根目录（默认为True，不删除传入的根目录）
+        dry_run: 是否为预览模式，只显示操作不实际执行
+        
+    Returns:
+        bool: 是否成功删除了目录
+    """
+    if not os.path.exists(directory) or not os.path.isdir(directory):
+        return False
+    
+    removed_count = 0
     
     try:
-        shutil.move(source_path, target_path)
-        logging.info(f"移动文件: {source_path} -> {target_path}")
-        return True
-    except Exception as e:
-        logging.error(f"移动文件失败: {source_path} -> {target_path}, 错误: {e}")
+        # 首先递归处理所有子目录
+        for item in os.listdir(directory):
+            item_path = os.path.join(directory, item)
+            if os.path.isdir(item_path):
+                # 递归处理子目录，子目录可以被删除
+                if remove_empty_directories(item_path, preserve_root=False, dry_run=dry_run):
+                    removed_count += 1
+        
+        # 检查当前目录是否可以删除
+        if not preserve_root and can_remove_directory(directory):
+            if dry_run:
+                # 预览模式：只显示将要执行的操作
+                junk_files = []
+                for item in os.listdir(directory):
+                    item_path = os.path.join(directory, item)
+                    if os.path.isfile(item_path):
+                        _, ext = os.path.splitext(item)
+                        if ext.lower() in IGNORED_EXTENSIONS:
+                            junk_files.append(item_path)
+                
+                if junk_files:
+                    logging.info(f"[预览] 将删除垃圾文件: {', '.join(junk_files)}")
+                
+                logging.info(f"[预览] 将删除空目录: {directory}")
+                return True
+            else:
+                # 实际执行模式
+                # 删除垃圾文件
+                for item in os.listdir(directory):
+                    item_path = os.path.join(directory, item)
+                    if os.path.isfile(item_path):
+                        _, ext = os.path.splitext(item)
+                        if ext.lower() in IGNORED_EXTENSIONS:
+                            try:
+                                os.remove(item_path)
+                                logging.info(f"删除垃圾文件: {item_path}")
+                            except Exception as e:
+                                logging.warning(f"删除垃圾文件失败: {item_path}, 错误: {e}")
+                
+                # 删除目录
+                try:
+                    os.rmdir(directory)
+                    logging.info(f"删除空目录: {directory}")
+                    return True
+                except Exception as e:
+                    logging.warning(f"删除目录失败: {directory}, 错误: {e}")
+                    return False
+        
+        return removed_count > 0
+        
+    except (OSError, PermissionError) as e:
+        logging.warning(f"处理目录时出错: {directory}, 错误: {e}")
         return False
 
 
 def process_directory(source_dir, target_base_dir, resolution=None, codec=None, 
                      year_group=False, remove_source=False, require_ai_subtitle=True, 
-                     override_files=True):
+                     override_files=True, dry_run=False):
     """
     处理源目录中的所有电影文件
     
@@ -603,6 +716,7 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
         remove_source: 是否在处理后删除源目录
         require_ai_subtitle: 是否只处理存在.ai.srt字幕文件的视频
         override_files: 是否覆盖已存在的文件，默认为True
+        dry_run: 是否为预览模式，只显示操作不实际执行
         
     Returns:
         tuple: (成功数, 失败数, 跳过数, 删除目录数)
@@ -665,7 +779,7 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
             logging.info(f"目标目录: {target_dir} (电影: {movie_name}, 年份: {year or '未知'})")
             
             # 移动视频文件
-            if move_file(source_path, target_dir, override_files):
+            if move_file(source_path, target_dir, override_files, dry_run):
                 success_count += 1
                 # 记录处理过的目录
                 processed_dirs.add(os.path.dirname(source_path))
@@ -708,7 +822,7 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
             target_dir, video_basename = corresponding_video
             
             # 移动字幕文件
-            if move_file(source_path, target_dir, override_files):
+            if move_file(source_path, target_dir, override_files, dry_run):
                 success_count += 1
                 # 记录处理过的目录
                 processed_dirs.add(os.path.dirname(source_path))
@@ -735,16 +849,23 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
             # 跳过源目录本身
             if dir_path == source_dir:
                 continue
-                
-            if can_remove_directory(dir_path):
-                try:
-                    shutil.rmtree(dir_path)
-                    logging.info(f"删除源目录: {dir_path}")
-                    removed_dirs_count += 1
-                except Exception as e:
-                    logging.error(f"删除源目录失败: {dir_path}, 错误: {e}")
+            
+            # 使用新的递归删除函数
+            if remove_empty_directories(dir_path, preserve_root=False, dry_run=dry_run):
+                removed_dirs_count += 1
+                if dry_run:
+                    logging.info(f"[预览] 将删除目录及其子目录: {dir_path}")
+                else:
+                    logging.info(f"成功删除目录及其子目录: {dir_path}")
             else:
-                logging.debug(f"源目录不为空，跳过删除: {dir_path}")
+                logging.debug(f"目录不为空或删除失败，跳过: {dir_path}")
+        
+        # 最后尝试清理源目录下的空目录和垃圾文件（但保留源目录本身）
+        if remove_empty_directories(source_dir, preserve_root=True, dry_run=dry_run):
+            if dry_run:
+                logging.info(f"[预览] 将清理源目录下的空目录和垃圾文件: {source_dir}")
+            else:
+                logging.info(f"清理了源目录下的空目录和垃圾文件: {source_dir}")
     
     return success_count, failure_count, skipped_count, removed_dirs_count
 
@@ -760,6 +881,8 @@ def main():
     parser.add_argument('--remove-source', action='store_true', help='移动文件后删除源目录（如果源目录为空或只剩下nfo、txt、jpg等文件）')
     parser.add_argument('--force', action='store_true', help='强制处理所有视频文件，忽略AI字幕检查（默认只处理有AI字幕的文件）')
     parser.add_argument('--no-override', action='store_true', help='不覆盖已存在的目标文件（默认覆盖已存在的文件）')
+    parser.add_argument('--dry-run', action='store_true', help='预览模式：只显示将要执行的操作，不实际移动或删除文件')
+    parser.add_argument('--confirm-delete', action='store_true', help='删除目录前需要用户确认（与--remove-source一起使用）')
     parser.add_argument('--version', action='version', version=f'mv2moviedir {__version__}')
     
     args = parser.parse_args()
@@ -772,6 +895,8 @@ def main():
     remove_source = args.remove_source
     require_ai_subtitle = not args.force  # 默认启用AI字幕检查，--force时禁用
     override_files = not args.no_override  # 默认覆盖文件，--no-override时不覆盖
+    dry_run = args.dry_run
+    confirm_delete = args.confirm_delete
     
     # 检查源目录和目标目录是否存在
     if not os.path.isdir(source_dir):
@@ -783,10 +908,42 @@ def main():
         sys.exit(1)
     
     # 检查目标目录权限
-    if not check_directory_permissions(target_dir):
+    if not dry_run and not check_directory_permissions(target_dir):
         print(f"错误: 目标目录没有写权限: {target_dir}")
         print("请检查目录权限或使用sudo运行脚本")
         sys.exit(1)
+    
+    # 安全检查：防止意外删除重要目录
+    if remove_source:
+        # 检查源目录是否为系统重要目录
+        important_dirs = ['/home', '/Users', '/root', '/etc', '/var', '/usr', '/bin', '/sbin', '/opt']
+        source_abs = os.path.abspath(source_dir)
+        
+        for important_dir in important_dirs:
+            if source_abs.startswith(important_dir) and source_abs.count(os.sep) <= important_dir.count(os.sep) + 2:
+                print(f"错误: 为了安全起见，不允许删除系统重要目录附近的目录: {source_dir}")
+                print("请使用更深层的子目录作为源目录")
+                sys.exit(1)
+        
+        # 检查源目录和目标目录是否相同或有包含关系
+        target_abs = os.path.abspath(target_dir)
+        if source_abs == target_abs:
+            print(f"错误: 源目录和目标目录不能相同: {source_dir}")
+            sys.exit(1)
+        
+        if target_abs.startswith(source_abs):
+            print(f"错误: 目标目录不能在源目录内部: 源={source_dir}, 目标={target_dir}")
+            sys.exit(1)
+        
+        # 如果启用了确认删除，给出警告
+        if confirm_delete and not dry_run:
+            print(f"警告: 启用了源目录删除功能")
+            print(f"源目录: {source_dir}")
+            print(f"将会删除处理后的空目录和只包含垃圾文件的目录")
+            response = input("确认继续吗？(y/N): ").strip().lower()
+            if response not in ['y', 'yes']:
+                print("操作已取消")
+                sys.exit(0)
     
     # 记录过滤条件
     filter_info = ""
@@ -808,7 +965,7 @@ def main():
     # 处理目录
     success_count, failure_count, skipped_count, removed_dirs_count = process_directory(
         source_dir, target_dir, resolution, codec, year_group, remove_source, 
-        require_ai_subtitle, override_files
+        require_ai_subtitle, override_files, dry_run
     )
     
     # 输出处理结果

@@ -16,7 +16,10 @@ v1.0.0
 - **中文广告去除**: 自动识别并去除文件名和目录名中的中文广告内容
 - **高级过滤**: 支持按分辨率、编码过滤文件
 - **年份分组**: 可选择按年份创建子目录
+- **源目录清理**: 智能删除空的源子目录和垃圾文件
 - **安全特性**: 两阶段处理、失败回滚、详细日志记录
+- **预览模式**: 支持干运行模式，预览操作而不实际执行
+- **用户确认**: 可选的删除确认功能，提高安全性
 
 ## 安装要求
 
@@ -35,7 +38,7 @@ python3 mv2moviedir.py 源目录 目标目录
 
 ```bash
 usage: mv2moviedir.py [-h] [--resolution RESOLUTION] [--codec CODEC] [--year-group] [--remove-source]
-                      [--force] [--no-override] [--version]
+                      [--force] [--no-override] [--dry-run] [--confirm-delete] [--version]
                       source_dir target_dir
 
 将电影文件移动到按电影名组织的目录结构中
@@ -53,6 +56,8 @@ options:
   --remove-source       移动文件后删除源目录（如果源目录为空或只剩下nfo、txt、jpg等文件）
   --force               强制处理所有视频文件，忽略AI字幕检查（默认只处理有AI字幕的文件）
   --no-override         不覆盖已存在的目标文件（默认覆盖已存在的文件）
+  --dry-run             预览模式：只显示将要执行的操作，不实际移动或删除文件
+  --confirm-delete      删除目录前需要用户确认（与--remove-source一起使用）
   --version             show program's version number and exit
 ```
 
@@ -88,6 +93,25 @@ python3 mv2moviedir.py /path/to/movies /path/to/organized --force
 python3 mv2moviedir.py /path/to/movies /path/to/organized --remove-source
 ```
 
+#### 7. 预览模式（不实际执行操作）
+```bash
+python3 mv2moviedir.py /path/to/movies /path/to/organized --remove-source --dry-run
+```
+
+#### 8. 删除前需要确认
+```bash
+python3 mv2moviedir.py /path/to/movies /path/to/organized --remove-source --confirm-delete
+```
+
+#### 9. 组合使用：预览 + 确认删除
+```bash
+# 先预览操作
+python3 mv2moviedir.py /path/to/movies /path/to/organized --remove-source --dry-run
+
+# 确认无误后实际执行
+python3 mv2moviedir.py /path/to/movies /path/to/organized --remove-source --confirm-delete
+```
+
 ## 支持的文件格式
 
 ### 视频文件
@@ -107,9 +131,16 @@ python3 mv2moviedir.py /path/to/movies /path/to/organized --remove-source
 
 **注意**: 脚本会自动排除包含 `SxxExx` 格式的电视剧文件。
 
-## 中文广告去除功能
+## 智能文件重命名功能
 
-脚本具备智能的中文广告识别和去除功能，能够自动清理文件名和目录名中的广告内容。
+脚本具备智能的文件重命名功能，能够自动清理文件名和目录名中的广告内容，确保目标文件名干净整洁。
+
+### 文件重命名特性
+
+- **目录名清理**: 创建的目标目录名会自动去除广告内容
+- **文件名清理**: 移动到目标目录的文件名也会自动清理
+- **双重处理**: 目录名和文件名都经过相同的清理逻辑
+- **保持一致**: 确保目录名和文件名的命名风格统一
 
 ### 支持的广告模式
 
@@ -126,28 +157,40 @@ python3 mv2moviedir.py /path/to/movies /path/to/organized --remove-source
 
 #### 处理前
 ```
+Bluff.2022.1080p.WEBRip.x264.AAC-[YTS.MX].mp4
+Avatar.2009.1080p.BluRay.x264-(YIFY).mkv
 阿凡达2：水之道.2022.1080p.BluRay.x265-【www.example.com】.mkv
 蜘蛛侠：英雄无归.2021.4K.UHD.BluRay.x265.HDR-[电影下载站].mkv
-The.Stage.2017.1080p.BluRay.x264-广告推广123456.mkv
 ```
 
 #### 处理后
 ```
+目录名: Bluff.2022.1080p.WEBRip.x264.AAC-YTS.MX/
+文件名: Bluff.2022.1080p.WEBRip.x264.AAC-YTS.MX.mp4
+
+目录名: Avatar.2009.1080p.BluRay.x264-.YIFY/
+文件名: Avatar.2009.1080p.BluRay.x264-.YIFY.mkv
+
 目录名: 阿凡达2：水之道.2022/
 文件名: 阿凡达2：水之道.2022.1080p.BluRay.x265.mkv
 
 目录名: 蜘蛛侠：英雄无归.2021/
 文件名: 蜘蛛侠：英雄无归.2021.4K.UHD.BluRay.x265.HDR.mkv
-
-目录名: The.Stage.2017/
-文件名: The.Stage.2017.1080p.BluRay.x264.mkv
 ```
+
+#### 清理效果说明
+- `[YTS.MX]` → `YTS.MX` (去除方括号)
+- `(YIFY)` → `.YIFY` (去除圆括号，转换为点号分隔)
+- `【www.example.com】` → 完全去除
+- `[电影下载站]` → 完全去除
 
 ### 技术特点
 
 - **智能识别**: 使用正则表达式精确匹配各种广告模式
 - **保留核心**: 只去除广告内容，保留电影名称、年份、分辨率等核心信息
-- **统一处理**: 目录名和文件名使用相同的处理逻辑，确保命名一致性
+- **统一处理**: 目录名和文件名使用相同的清理逻辑，确保命名一致性
+- **实时重命名**: 文件移动时自动清理文件名，无需额外步骤
+- **日志记录**: 详细记录文件名清理过程，便于跟踪变更
 - **安全清理**: 避免误删重要的电影信息
 
 ## AI字幕检查
@@ -244,6 +287,89 @@ The.Stage.2017.1080p.BluRay.x264-广告推广123456.mkv
 2025-09-28 11:28:24,281 - INFO - 成功移动字幕文件: 阿凡达2：水之道.2022.1080p.BluRay.x265.ai.srt (已去除广告)
 2025-09-28 11:28:24,281 - INFO - 处理完成: 成功 = 6, 失败 = 0, 跳过 = 0
 ```
+
+## 源目录清理功能
+
+### 智能目录删除 (--remove-source)
+
+当使用 `--remove-source` 参数时，脚本会在成功移动文件后智能清理源目录：
+
+#### 清理规则
+1. **递归删除空目录**: 自动删除不包含任何文件的子目录
+2. **清理垃圾文件**: 删除以下类型的文件：
+   - `.nfo` - 电影信息文件
+   - `.txt` - 文本文件
+   - `.jpg`, `.jpeg`, `.png`, `.gif`, `.bmp`, `.tiff` - 图片文件
+3. **保留源目录根**: 源目录本身会被保留（但会被清空）
+4. **安全检查**: 只删除确认为空或只包含垃圾文件的目录
+
+#### 清理示例
+
+**处理前的源目录结构:**
+```
+源目录/
+├── movie1/
+│   ├── The.Matrix.1999.1080p.BluRay.x264.mkv
+│   ├── The.Matrix.1999.1080p.BluRay.x264.srt
+│   ├── movie.nfo
+│   └── poster.jpg
+├── movie2/
+│   ├── subdir/
+│   │   └── readme.txt
+│   ├── Inception.2010.720p.WEBRip.x265.mp4
+│   └── info.nfo
+└── junk.txt
+```
+
+**处理后的源目录结构:**
+```
+源目录/
+(空目录 - 所有子目录和垃圾文件已被清理)
+```
+
+### 预览模式 (--dry-run)
+
+预览模式让您在实际执行前查看所有将要进行的操作：
+
+#### 预览功能
+- **文件移动预览**: 显示哪些文件将被移动到哪里
+- **目录删除预览**: 显示哪些目录和文件将被删除
+- **安全无风险**: 不会实际修改任何文件或目录
+- **详细日志**: 所有预览操作都标记为 `[预览]`
+
+#### 预览日志示例
+```
+2025-09-29 08:09:57,148 - INFO - [预览] 将移动文件: source/movie.mkv -> target/Movie.2019/movie.mkv
+2025-09-29 08:09:57,148 - INFO - [预览] 将删除垃圾文件: source/movie1/junk.txt
+2025-09-29 08:09:57,148 - INFO - [预览] 将删除空目录: source/movie1
+2025-09-29 08:09:57,149 - INFO - [预览] 将清理源目录下的空目录和垃圾文件: source
+```
+
+### 确认删除 (--confirm-delete)
+
+为了提高安全性，可以启用删除确认功能：
+
+#### 确认机制
+- **用户提示**: 在删除目录前会提示用户确认
+- **安全警告**: 显示将要删除的目录路径
+- **可中断**: 用户可以选择取消操作
+- **与预览配合**: 建议先使用 `--dry-run` 预览，再使用 `--confirm-delete` 执行
+
+#### 确认提示示例
+```
+警告: 即将删除源目录中的空目录和垃圾文件
+源目录: /path/to/source
+这个操作不可逆，请确认是否继续？ (y/N): 
+```
+
+### 安全检查
+
+脚本内置多重安全检查机制：
+
+1. **目录权限检查**: 确保对源目录和目标目录有适当权限
+2. **路径安全检查**: 防止删除重要系统目录
+3. **目录关系检查**: 防止目标目录是源目录的子目录
+4. **同目录检查**: 防止源目录和目标目录相同
 
 ## 安全特性
 
