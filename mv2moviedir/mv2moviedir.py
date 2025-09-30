@@ -512,7 +512,7 @@ def create_target_directory(base_dir, filename_without_ext, year=None, year_grou
 
 def can_remove_directory(directory):
     """
-    检查目录是否可以删除（为空或只包含被忽略的文件类型和可删除的子目录）
+    检查目录是否可以删除（为空或只包含被忽略的文件类型、孤立的字幕文件和可删除的子目录）
     
     Args:
         directory: 目录路径
@@ -532,6 +532,17 @@ def can_remove_directory(directory):
         if not items:
             return True
         
+        # 首先收集所有视频文件的基础名称（不含扩展名）
+        video_basenames = set()
+        for item in items:
+            item_path = os.path.join(directory, item)
+            if os.path.isfile(item_path):
+                _, ext = os.path.splitext(item)
+                if ext.lower() in VIDEO_EXTENSIONS:
+                    # 获取不含扩展名的文件名
+                    basename = os.path.splitext(item)[0]
+                    video_basenames.add(basename)
+        
         # 检查每个项目
         for item in items:
             item_path = os.path.join(directory, item)
@@ -539,7 +550,35 @@ def can_remove_directory(directory):
             if os.path.isfile(item_path):
                 # 检查文件扩展名
                 _, ext = os.path.splitext(item)
-                if ext.lower() not in IGNORED_EXTENSIONS:
+                
+                if ext.lower() in IGNORED_EXTENSIONS:
+                    # 被忽略的文件类型，可以删除
+                    continue
+                elif ext.lower() in SUBTITLE_EXTENSIONS:
+                    # 字幕文件，检查是否有对应的视频文件
+                    subtitle_basename = os.path.splitext(item)[0]
+                    
+                    # 检查是否有完全匹配的视频文件
+                    has_matching_video = subtitle_basename in video_basenames
+                    
+                    # 如果没有完全匹配，检查是否有部分匹配（考虑字幕文件可能有额外的语言标识）
+                    if not has_matching_video:
+                        for video_basename in video_basenames:
+                            if subtitle_basename.startswith(video_basename):
+                                has_matching_video = True
+                                break
+                    
+                    # 如果没有对应的视频文件，视为孤立字幕文件，可以删除
+                    if not has_matching_video:
+                        continue
+                    else:
+                        # 有对应的视频文件，不能删除
+                        return False
+                elif ext.lower() in VIDEO_EXTENSIONS:
+                    # 视频文件，不能删除
+                    return False
+                else:
+                    # 其他类型的文件，不能删除
                     return False
             elif os.path.isdir(item_path):
                 # 递归检查子目录
@@ -654,8 +693,8 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False):
                 if remove_empty_directories(item_path, preserve_root=False, dry_run=dry_run):
                     removed_count += 1
         
-        # 检查当前目录是否可以删除
-        if not preserve_root and can_remove_directory(directory):
+        # 检查当前目录是否可以删除或清理
+        if can_remove_directory(directory):
             if dry_run:
                 # 预览模式：只显示将要执行的操作
                 junk_files = []
@@ -669,30 +708,63 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False):
                 if junk_files:
                     logging.info(f"[预览] 将删除垃圾文件: {', '.join(junk_files)}")
                 
-                logging.info(f"[预览] 将删除空目录: {directory}")
+                if not preserve_root:
+                    logging.info(f"[预览] 将删除空目录: {directory}")
                 return True
             else:
                 # 实际执行模式
-                # 删除垃圾文件
+                # 删除垃圾文件和孤立的字幕文件
+                junk_files_removed = 0
+                
+                # 首先收集所有视频文件的基础名称
+                video_basenames = set()
                 for item in os.listdir(directory):
                     item_path = os.path.join(directory, item)
                     if os.path.isfile(item_path):
                         _, ext = os.path.splitext(item)
+                        if ext.lower() in VIDEO_EXTENSIONS:
+                            basename = os.path.splitext(item)[0]
+                            video_basenames.add(basename)
+                
+                # 删除垃圾文件和孤立的字幕文件
+                for item in os.listdir(directory):
+                    item_path = os.path.join(directory, item)
+                    if os.path.isfile(item_path):
+                        _, ext = os.path.splitext(item)
+                        should_remove = False
+                        
+                        # 检查是否是垃圾文件
                         if ext.lower() in IGNORED_EXTENSIONS:
+                            should_remove = True
+                        # 检查是否是孤立的字幕文件
+                        elif ext.lower() in SUBTITLE_EXTENSIONS:
+                            basename = os.path.splitext(item)[0]
+                            if basename not in video_basenames:
+                                should_remove = True
+                        
+                        if should_remove:
                             try:
                                 os.remove(item_path)
-                                logging.info(f"删除垃圾文件: {item_path}")
+                                if ext.lower() in IGNORED_EXTENSIONS:
+                                    logging.info(f"删除垃圾文件: {item_path}")
+                                else:
+                                    logging.info(f"删除孤立字幕文件: {item_path}")
+                                junk_files_removed += 1
                             except Exception as e:
-                                logging.warning(f"删除垃圾文件失败: {item_path}, 错误: {e}")
+                                logging.warning(f"删除文件失败: {item_path}, 错误: {e}")
                 
-                # 删除目录
-                try:
-                    os.rmdir(directory)
-                    logging.info(f"删除空目录: {directory}")
-                    return True
-                except Exception as e:
-                    logging.warning(f"删除目录失败: {directory}, 错误: {e}")
-                    return False
+                # 如果不保留根目录，尝试删除目录本身
+                if not preserve_root:
+                    try:
+                        os.rmdir(directory)
+                        logging.info(f"删除空目录: {directory}")
+                        return True
+                    except Exception as e:
+                        logging.warning(f"删除目录失败: {directory}, 错误: {e}")
+                        return False
+                else:
+                    # 保留根目录，但返回是否清理了垃圾文件
+                    return junk_files_removed > 0
         
         return removed_count > 0
         
