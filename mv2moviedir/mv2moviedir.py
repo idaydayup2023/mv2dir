@@ -92,6 +92,38 @@ QUALITY_PATTERNS = [
 # 常见的发布组标识符
 RELEASE_GROUP_PATTERN = re.compile(r'-([A-Z0-9]+)$|[\[\(]([A-Z0-9]+)[\]\)]$')
 
+# 受限制内容配置
+# 当文件名包含以下单词时，将统一移动到受限制目录而不是正常的目标目录
+RESTRICTED_KEYWORDS = [
+    'Tagalog',      # 他加禄语内容
+    'Filipino',     # 菲律宾语内容
+    'Pinoy',        # 菲律宾俚语
+    # 可以在此添加更多需要限制的关键词
+    'Adult',      # 成人内容示例
+    'XXX',        # 成人内容示例
+]
+
+# 受限制内容的目标目录
+RESTRICTED_TARGET_DIR = '/volume1/Restricted/'
+
+
+def contains_restricted_keywords(filename):
+    """
+    检查文件名是否包含受限制的关键词
+    
+    Args:
+        filename: 文件名
+        
+    Returns:
+        bool: 如果包含受限制关键词返回True，否则返回False
+    """
+    filename_lower = filename.lower()
+    for keyword in RESTRICTED_KEYWORDS:
+        if keyword.lower() in filename_lower:
+            logging.info(f"检测到受限制关键词 '{keyword}' 在文件: {filename}")
+            return True
+    return False
+
 
 def is_movie(filename):
     """
@@ -873,14 +905,28 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
             # 获取不含扩展名的完整文件名
             filename_without_ext = os.path.splitext(filename)[0]
             
-            # 创建目标目录
-            target_dir = create_target_directory(target_base_dir, filename_without_ext, year, year_group)
-            if target_dir is None:
-                logging.error(f"跳过文件: {filename} (无法创建目标目录)")
-                failure_count += 1
-                continue
-                
-            logging.info(f"目标目录: {target_dir} (电影: {movie_name}, 年份: {year or '未知'})")
+            # 检查是否包含受限制关键词
+            if contains_restricted_keywords(filename):
+                # 包含受限制关键词，使用受限制目录
+                target_dir = RESTRICTED_TARGET_DIR
+                # 确保受限制目录存在
+                if not os.path.exists(target_dir):
+                    try:
+                        os.makedirs(target_dir)
+                        logging.info(f"创建受限制目录: {target_dir}")
+                    except (PermissionError, OSError) as e:
+                        logging.error(f"无法创建受限制目录 {target_dir}: {e}")
+                        failure_count += 1
+                        continue
+                logging.info(f"受限制内容目标目录: {target_dir} (电影: {movie_name}, 年份: {year or '未知'})")
+            else:
+                # 正常处理，创建目标目录
+                target_dir = create_target_directory(target_base_dir, filename_without_ext, year, year_group)
+                if target_dir is None:
+                    logging.error(f"跳过文件: {filename} (无法创建目标目录)")
+                    failure_count += 1
+                    continue
+                logging.info(f"目标目录: {target_dir} (电影: {movie_name}, 年份: {year or '未知'})")
             
             # 移动视频文件
             if move_file(source_path, target_dir, override_files, dry_run):
@@ -919,11 +965,26 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
                     break
             
             if corresponding_video is None:
-                logging.info(f"跳过字幕文件: {filename} (对应的视频文件未被移动)")
-                skipped_count += 1
-                continue
-            
-            target_dir, video_basename = corresponding_video
+                # 没有对应的视频文件，检查是否为独立的字幕文件且包含受限制关键词
+                if contains_restricted_keywords(filename):
+                    # 独立的受限制字幕文件，移动到受限制目录
+                    target_dir = RESTRICTED_TARGET_DIR
+                    # 确保受限制目录存在
+                    if not os.path.exists(target_dir):
+                        try:
+                            os.makedirs(target_dir)
+                            logging.info(f"创建受限制目录: {target_dir}")
+                        except (PermissionError, OSError) as e:
+                            logging.error(f"无法创建受限制目录 {target_dir}: {e}")
+                            failure_count += 1
+                            continue
+                    logging.info(f"独立受限制字幕文件目标目录: {target_dir}")
+                else:
+                    logging.info(f"跳过字幕文件: {filename} (对应的视频文件未被移动)")
+                    skipped_count += 1
+                    continue
+            else:
+                target_dir, video_basename = corresponding_video
             
             # 移动字幕文件
             if move_file(source_path, target_dir, override_files, dry_run):
