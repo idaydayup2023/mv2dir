@@ -512,7 +512,7 @@ def create_target_directory(base_dir, filename_without_ext, year=None, year_grou
 
 def can_remove_directory(directory):
     """
-    检查目录是否可以删除（为空或只包含被忽略的文件类型、孤立的字幕文件和可删除的子目录）
+    检查目录是否可以删除（为空或只包含被忽略的文件类型、孤立的字幕文件、无效的视频文件和可删除的子目录）
     
     Args:
         directory: 目录路径
@@ -532,16 +532,22 @@ def can_remove_directory(directory):
         if not items:
             return True
         
-        # 首先收集所有视频文件的基础名称（不含扩展名）
-        video_basenames = set()
+        # 首先收集所有有效视频文件的基础名称（不含扩展名）
+        valid_video_basenames = set()
         for item in items:
             item_path = os.path.join(directory, item)
             if os.path.isfile(item_path):
                 _, ext = os.path.splitext(item)
                 if ext.lower() in VIDEO_EXTENSIONS:
-                    # 获取不含扩展名的文件名
-                    basename = os.path.splitext(item)[0]
-                    video_basenames.add(basename)
+                    # 检查是否是有效的电影文件（能提取到年份）
+                    try:
+                        movie_name, year = extract_movie_info(item)
+                        if year is not None:  # 只有能提取到年份的才算有效视频文件
+                            basename = os.path.splitext(item)[0]
+                            valid_video_basenames.add(basename)
+                    except:
+                        # 如果提取信息失败，视为无效视频文件，可以删除
+                        pass
         
         # 检查每个项目
         for item in items:
@@ -555,28 +561,38 @@ def can_remove_directory(directory):
                     # 被忽略的文件类型，可以删除
                     continue
                 elif ext.lower() in SUBTITLE_EXTENSIONS:
-                    # 字幕文件，检查是否有对应的视频文件
+                    # 字幕文件，检查是否有对应的有效视频文件
                     subtitle_basename = os.path.splitext(item)[0]
                     
-                    # 检查是否有完全匹配的视频文件
-                    has_matching_video = subtitle_basename in video_basenames
+                    # 检查是否有完全匹配的有效视频文件
+                    has_matching_video = subtitle_basename in valid_video_basenames
                     
                     # 如果没有完全匹配，检查是否有部分匹配（考虑字幕文件可能有额外的语言标识）
                     if not has_matching_video:
-                        for video_basename in video_basenames:
+                        for video_basename in valid_video_basenames:
                             if subtitle_basename.startswith(video_basename):
                                 has_matching_video = True
                                 break
                     
-                    # 如果没有对应的视频文件，视为孤立字幕文件，可以删除
+                    # 如果没有对应的有效视频文件，视为孤立字幕文件，可以删除
                     if not has_matching_video:
                         continue
                     else:
-                        # 有对应的视频文件，不能删除
+                        # 有对应的有效视频文件，不能删除
                         return False
                 elif ext.lower() in VIDEO_EXTENSIONS:
-                    # 视频文件，不能删除
-                    return False
+                    # 视频文件，检查是否是有效的电影文件
+                    try:
+                        movie_name, year = extract_movie_info(item)
+                        if year is not None:
+                            # 有效的电影文件，不能删除
+                            return False
+                        else:
+                            # 无效的视频文件（如sample.mkv），可以删除
+                            continue
+                    except:
+                        # 如果提取信息失败，视为无效视频文件，可以删除
+                        continue
                 else:
                     # 其他类型的文件，不能删除
                     return False
@@ -713,42 +729,58 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False):
                 return True
             else:
                 # 实际执行模式
-                # 删除垃圾文件和孤立的字幕文件
+                # 删除垃圾文件、孤立的字幕文件和无效的视频文件
                 junk_files_removed = 0
                 
-                # 首先收集所有视频文件的基础名称
-                video_basenames = set()
+                # 首先收集所有有效视频文件的基础名称（能提取到年份的）
+                valid_video_basenames = set()
                 for item in os.listdir(directory):
                     item_path = os.path.join(directory, item)
                     if os.path.isfile(item_path):
                         _, ext = os.path.splitext(item)
                         if ext.lower() in VIDEO_EXTENSIONS:
-                            basename = os.path.splitext(item)[0]
-                            video_basenames.add(basename)
+                            try:
+                                movie_name, year = extract_movie_info(item)
+                                if year is not None:  # 只有能提取到年份的才算有效视频文件
+                                    basename = os.path.splitext(item)[0]
+                                    valid_video_basenames.add(basename)
+                            except:
+                                # 如果提取信息失败，视为无效视频文件
+                                pass
                 
-                # 删除垃圾文件和孤立的字幕文件
+                # 删除垃圾文件、孤立的字幕文件和无效的视频文件
                 for item in os.listdir(directory):
                     item_path = os.path.join(directory, item)
                     if os.path.isfile(item_path):
                         _, ext = os.path.splitext(item)
                         should_remove = False
+                        remove_reason = ""
                         
                         # 检查是否是垃圾文件
                         if ext.lower() in IGNORED_EXTENSIONS:
                             should_remove = True
+                            remove_reason = "垃圾文件"
                         # 检查是否是孤立的字幕文件
                         elif ext.lower() in SUBTITLE_EXTENSIONS:
                             basename = os.path.splitext(item)[0]
-                            if basename not in video_basenames:
+                            if basename not in valid_video_basenames:
                                 should_remove = True
+                                remove_reason = "孤立字幕文件"
+                        # 检查是否是无效的视频文件
+                        elif ext.lower() in VIDEO_EXTENSIONS:
+                            try:
+                                movie_name, year = extract_movie_info(item)
+                                if year is None:
+                                    should_remove = True
+                                    remove_reason = "无效视频文件"
+                            except:
+                                should_remove = True
+                                remove_reason = "无效视频文件"
                         
                         if should_remove:
                             try:
                                 os.remove(item_path)
-                                if ext.lower() in IGNORED_EXTENSIONS:
-                                    logging.info(f"删除垃圾文件: {item_path}")
-                                else:
-                                    logging.info(f"删除孤立字幕文件: {item_path}")
+                                logging.info(f"删除{remove_reason}: {item_path}")
                                 junk_files_removed += 1
                             except Exception as e:
                                 logging.warning(f"删除文件失败: {item_path}, 错误: {e}")
