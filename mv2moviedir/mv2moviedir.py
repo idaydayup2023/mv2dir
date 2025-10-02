@@ -543,6 +543,36 @@ def create_target_directory(base_dir, filename_without_ext, year=None, year_grou
     return target_dir
 
 
+def contains_tv_show_files_in_directory_only(directory):
+    """
+    检查单个目录（不递归）是否包含电视剧文件
+    
+    Args:
+        directory: 目录路径
+        
+    Returns:
+        bool: 是否包含电视剧文件
+    """
+    if not os.path.exists(directory) or not os.path.isdir(directory):
+        return False
+    
+    try:
+        # 只检查当前目录中的文件，不递归检查子目录
+        for filename in os.listdir(directory):
+            file_path = os.path.join(directory, filename)
+            if os.path.isfile(file_path):
+                _, ext = os.path.splitext(filename)
+                if ext.lower() in VIDEO_EXTENSIONS:
+                    # 检查是否是电视剧文件
+                    if TV_SHOW_PATTERN.search(filename):
+                        logging.info(f"发现电视剧文件: {file_path}")
+                        return True
+        return False
+    except Exception as e:
+        logging.warning(f"检查目录时出错: {directory}, 错误: {e}")
+        return False
+
+
 def contains_tv_show_files(directory):
     """
     检查目录是否包含电视剧文件
@@ -920,18 +950,25 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
     skipped_count = 0
     removed_dirs_count = 0
     
-    # 首先检查源目录是否包含电视剧文件，如果包含则完全跳过处理
-    if contains_tv_show_files(source_dir):
-        logging.info(f"检测到电视剧目录，完全跳过处理: {source_dir}")
-        return success_count, failure_count, skipped_count, removed_dirs_count
-    
     # 收集处理过的目录，用于后续检查是否可以删除
     processed_dirs = set()
+    # 收集跳过的电视剧目录，避免重复检查
+    skipped_tv_dirs = set()
     # 记录成功移动的视频文件，用于后续移动对应的字幕文件
     moved_videos = {}  # {video_basename_without_ext: (target_dir, source_dir)}
     
     # 第一阶段：处理视频文件
     for root, _, files in os.walk(source_dir, topdown=False):
+        # 检查当前目录是否已经被标记为电视剧目录
+        if root in skipped_tv_dirs:
+            continue
+            
+        # 检查当前目录（不递归）是否包含电视剧文件
+        if contains_tv_show_files_in_directory_only(root):
+            logging.info(f"检测到电视剧目录，跳过处理: {root}")
+            skipped_tv_dirs.add(root)
+            continue
+            
         for filename in files:
             # 检查是否为电影文件
             if not is_movie(filename):
