@@ -66,6 +66,7 @@ YEAR_PATTERN = re.compile(r'[.\s\(\)\[\]](19[0-9]{2}|20[0-9]{2})(?=[.\s\(\)\[\]]
 RELEASE_YEAR_PATTERNS = [
     re.compile(r'[.\s\(\)\[\]](19[0-9]{2}|20[0-9]{2})(?=[.\s\(\)\[\]](BluRay|BDRip|BRRip|DVDRip|WEBRip|WEB-DL|HDRip|Directors|Cut|Extended|Unrated|REMUX|REPACK|PROPER|REAL))', re.IGNORECASE),
     re.compile(r'[.\s\(\)\[\]](19[0-9]{2}|20[0-9]{2})(?=[.\s\(\)\[\]](\d+p|4K|8K|UHD|HD|x26[45]|H\.?26[45]|AVC|HEVC|VP9|AV1))', re.IGNORECASE),
+    re.compile(r'[.\s\(\)\[\]](19[0-9]{2}|20[0-9]{2})(?=[.\s\(\)\[\]](Tagalog|Filipino|Pinoy|Adult|XXX))', re.IGNORECASE),  # 受限制关键词前的年份
     re.compile(r'\((19[0-9]{2}|20[0-9]{2})\)'),
     re.compile(r'\[(19[0-9]{2}|20[0-9]{2})\]'),
     re.compile(r'[.\s](19[0-9]{2}|20[0-9]{2})$'),
@@ -564,6 +565,17 @@ def can_remove_directory(directory):
         if not items:
             return True
         
+        # 检查是否包含电视剧文件，如果包含则跳过删除
+        for item in items:
+            item_path = os.path.join(directory, item)
+            if os.path.isfile(item_path):
+                _, ext = os.path.splitext(item)
+                if ext.lower() in VIDEO_EXTENSIONS:
+                    # 检查是否是电视剧文件
+                    if TV_SHOW_PATTERN.search(item):
+                        logging.info(f"跳过删除包含电视剧文件的目录: {directory} (包含电视剧文件: {item})")
+                        return False
+        
         # 首先收集所有有效视频文件的基础名称（不含扩展名）
         valid_video_basenames = set()
         for item in items:
@@ -800,14 +812,19 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False):
                                 remove_reason = "孤立字幕文件"
                         # 检查是否是无效的视频文件
                         elif ext.lower() in VIDEO_EXTENSIONS:
-                            try:
-                                movie_name, year = extract_movie_info(item)
-                                if year is None:
+                            # 首先检查是否是电视剧文件，如果是则跳过删除
+                            if TV_SHOW_PATTERN.search(item):
+                                should_remove = False
+                                logging.info(f"跳过删除电视剧文件: {item_path}")
+                            else:
+                                try:
+                                    movie_name, year = extract_movie_info(item)
+                                    if year is None:
+                                        should_remove = True
+                                        remove_reason = "无效视频文件"
+                                except:
                                     should_remove = True
                                     remove_reason = "无效视频文件"
-                            except:
-                                should_remove = True
-                                remove_reason = "无效视频文件"
                         
                         if should_remove:
                             try:
@@ -905,27 +922,23 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
             # 获取不含扩展名的完整文件名
             filename_without_ext = os.path.splitext(filename)[0]
             
-            # 检查是否包含受限制关键词
-            if contains_restricted_keywords(filename):
-                # 包含受限制关键词，使用受限制目录
-                target_dir = RESTRICTED_TARGET_DIR
-                # 确保受限制目录存在
-                if not os.path.exists(target_dir):
-                    try:
-                        os.makedirs(target_dir)
-                        logging.info(f"创建受限制目录: {target_dir}")
-                    except (PermissionError, OSError) as e:
-                        logging.error(f"无法创建受限制目录 {target_dir}: {e}")
-                        failure_count += 1
-                        continue
+            # 检查是否包含受限制关键词，如果是则临时更换目标基础目录
+            current_target_base_dir = target_base_dir
+            is_restricted = contains_restricted_keywords(filename)
+            if is_restricted:
+                current_target_base_dir = RESTRICTED_TARGET_DIR
+                logging.info(f"检测到受限制关键词，临时更换目标目录为: {current_target_base_dir}")
+            
+            # 使用统一的逻辑创建目标目录
+            target_dir = create_target_directory(current_target_base_dir, filename_without_ext, year, year_group)
+            if target_dir is None:
+                logging.error(f"跳过文件: {filename} (无法创建目标目录)")
+                failure_count += 1
+                continue
+            
+            if is_restricted:
                 logging.info(f"受限制内容目标目录: {target_dir} (电影: {movie_name}, 年份: {year or '未知'})")
             else:
-                # 正常处理，创建目标目录
-                target_dir = create_target_directory(target_base_dir, filename_without_ext, year, year_group)
-                if target_dir is None:
-                    logging.error(f"跳过文件: {filename} (无法创建目标目录)")
-                    failure_count += 1
-                    continue
                 logging.info(f"目标目录: {target_dir} (电影: {movie_name}, 年份: {year or '未知'})")
             
             # 移动视频文件
@@ -965,24 +978,10 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
                     break
             
             if corresponding_video is None:
-                # 没有对应的视频文件，检查是否为独立的字幕文件且包含受限制关键词
-                if contains_restricted_keywords(filename):
-                    # 独立的受限制字幕文件，移动到受限制目录
-                    target_dir = RESTRICTED_TARGET_DIR
-                    # 确保受限制目录存在
-                    if not os.path.exists(target_dir):
-                        try:
-                            os.makedirs(target_dir)
-                            logging.info(f"创建受限制目录: {target_dir}")
-                        except (PermissionError, OSError) as e:
-                            logging.error(f"无法创建受限制目录 {target_dir}: {e}")
-                            failure_count += 1
-                            continue
-                    logging.info(f"独立受限制字幕文件目标目录: {target_dir}")
-                else:
-                    logging.info(f"跳过字幕文件: {filename} (对应的视频文件未被移动)")
-                    skipped_count += 1
-                    continue
+                # 没有对应的视频文件，跳过字幕文件
+                logging.info(f"跳过字幕文件: {filename} (对应的视频文件未被移动)")
+                skipped_count += 1
+                continue
             else:
                 target_dir, video_basename = corresponding_video
             
