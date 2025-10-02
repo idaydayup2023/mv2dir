@@ -543,6 +543,35 @@ def create_target_directory(base_dir, filename_without_ext, year=None, year_grou
     return target_dir
 
 
+def contains_tv_show_files(directory):
+    """
+    检查目录是否包含电视剧文件
+    
+    Args:
+        directory: 目录路径
+        
+    Returns:
+        bool: 是否包含电视剧文件
+    """
+    if not os.path.exists(directory) or not os.path.isdir(directory):
+        return False
+    
+    try:
+        # 递归检查目录及其子目录中的所有文件
+        for root, _, files in os.walk(directory):
+            for filename in files:
+                _, ext = os.path.splitext(filename)
+                if ext.lower() in VIDEO_EXTENSIONS:
+                    # 检查是否是电视剧文件
+                    if TV_SHOW_PATTERN.search(filename):
+                        logging.info(f"发现电视剧文件: {os.path.join(root, filename)}")
+                        return True
+        return False
+    except Exception as e:
+        logging.warning(f"检查目录时出错: {directory}, 错误: {e}")
+        return False
+
+
 def can_remove_directory(directory):
     """
     检查目录是否可以删除（为空或只包含被忽略的文件类型、孤立的字幕文件、无效的视频文件和可删除的子目录）
@@ -719,8 +748,14 @@ def move_file(source_file, target_dir, override_files=True, dry_run=False):
                 logging.info(f"覆盖已存在的文件: {target_file}")
         
         shutil.move(source_file, target_file)
-        logging.info(f"移动文件: {source_file} -> {target_file}")
-        return True
+        
+        # 验证目标文件是否真正存在
+        if os.path.exists(target_file):
+            logging.info(f"移动文件: {source_file} -> {target_file}")
+            return True
+        else:
+            logging.error(f"移动文件后验证失败，目标文件不存在: {target_file}")
+            return False
         
     except (OSError, PermissionError) as e:
         logging.error(f"移动文件失败: {source_file} -> {target_dir}, 错误: {e}")
@@ -742,6 +777,11 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False):
     if not os.path.exists(directory) or not os.path.isdir(directory):
         return False
     
+    # 完全保护电视剧目录：如果目录包含电视剧文件，则完全跳过处理
+    if contains_tv_show_files(directory):
+        logging.info(f"检测到电视剧目录，完全跳过清理: {directory}")
+        return False
+    
     removed_count = 0
     
     try:
@@ -753,99 +793,100 @@ def remove_empty_directories(directory, preserve_root=True, dry_run=False):
                 if remove_empty_directories(item_path, preserve_root=False, dry_run=dry_run):
                     removed_count += 1
         
-        # 检查当前目录是否可以删除或清理
-        if can_remove_directory(directory):
-            if dry_run:
-                # 预览模式：只显示将要执行的操作
-                junk_files = []
-                for item in os.listdir(directory):
-                    item_path = os.path.join(directory, item)
-                    if os.path.isfile(item_path):
-                        _, ext = os.path.splitext(item)
-                        if ext.lower() in IGNORED_EXTENSIONS:
-                            junk_files.append(item_path)
-                
-                if junk_files:
-                    logging.info(f"[预览] 将删除垃圾文件: {', '.join(junk_files)}")
-                
-                if not preserve_root:
-                    logging.info(f"[预览] 将删除空目录: {directory}")
-                return True
-            else:
-                # 实际执行模式
-                # 删除垃圾文件、孤立的字幕文件和无效的视频文件
-                junk_files_removed = 0
-                
-                # 首先收集所有有效视频文件的基础名称（能提取到年份的）
-                valid_video_basenames = set()
-                for item in os.listdir(directory):
-                    item_path = os.path.join(directory, item)
-                    if os.path.isfile(item_path):
-                        _, ext = os.path.splitext(item)
-                        if ext.lower() in VIDEO_EXTENSIONS:
+        # 检查当前目录是否可以删除
+        can_remove = can_remove_directory(directory)
+        
+        if dry_run:
+            # 预览模式：只显示将要执行的操作
+            junk_files = []
+            for item in os.listdir(directory):
+                item_path = os.path.join(directory, item)
+                if os.path.isfile(item_path):
+                    _, ext = os.path.splitext(item)
+                    if ext.lower() in IGNORED_EXTENSIONS:
+                        junk_files.append(item_path)
+            
+            if junk_files:
+                logging.info(f"[预览] 将删除垃圾文件: {', '.join(junk_files)}")
+            
+            if can_remove and not preserve_root:
+                logging.info(f"[预览] 将删除空目录: {directory}")
+            return True
+        else:
+            # 实际执行模式
+            # 删除垃圾文件、孤立的字幕文件和无效的视频文件
+            junk_files_removed = 0
+            
+            # 首先收集所有有效视频文件的基础名称（能提取到年份的）
+            valid_video_basenames = set()
+            for item in os.listdir(directory):
+                item_path = os.path.join(directory, item)
+                if os.path.isfile(item_path):
+                    _, ext = os.path.splitext(item)
+                    if ext.lower() in VIDEO_EXTENSIONS:
+                        try:
+                            movie_name, year = extract_movie_info(item)
+                            if year is not None:  # 只有能提取到年份的才算有效视频文件
+                                basename = os.path.splitext(item)[0]
+                                valid_video_basenames.add(basename)
+                        except:
+                            # 如果提取信息失败，视为无效视频文件
+                            pass
+            
+            # 删除垃圾文件、孤立的字幕文件和无效的视频文件
+            for item in os.listdir(directory):
+                item_path = os.path.join(directory, item)
+                if os.path.isfile(item_path):
+                    _, ext = os.path.splitext(item)
+                    should_remove = False
+                    remove_reason = ""
+                    
+                    # 检查是否是垃圾文件
+                    if ext.lower() in IGNORED_EXTENSIONS:
+                        should_remove = True
+                        remove_reason = "垃圾文件"
+                    # 检查是否是孤立的字幕文件
+                    elif ext.lower() in SUBTITLE_EXTENSIONS:
+                        basename = os.path.splitext(item)[0]
+                        if basename not in valid_video_basenames:
+                            should_remove = True
+                            remove_reason = "孤立字幕文件"
+                    # 检查是否是无效的视频文件
+                    elif ext.lower() in VIDEO_EXTENSIONS:
+                        # 首先检查是否是电视剧文件，如果是则跳过删除
+                        if TV_SHOW_PATTERN.search(item):
+                            should_remove = False
+                            logging.info(f"跳过删除电视剧文件: {item_path}")
+                        else:
                             try:
                                 movie_name, year = extract_movie_info(item)
-                                if year is not None:  # 只有能提取到年份的才算有效视频文件
-                                    basename = os.path.splitext(item)[0]
-                                    valid_video_basenames.add(basename)
-                            except:
-                                # 如果提取信息失败，视为无效视频文件
-                                pass
-                
-                # 删除垃圾文件、孤立的字幕文件和无效的视频文件
-                for item in os.listdir(directory):
-                    item_path = os.path.join(directory, item)
-                    if os.path.isfile(item_path):
-                        _, ext = os.path.splitext(item)
-                        should_remove = False
-                        remove_reason = ""
-                        
-                        # 检查是否是垃圾文件
-                        if ext.lower() in IGNORED_EXTENSIONS:
-                            should_remove = True
-                            remove_reason = "垃圾文件"
-                        # 检查是否是孤立的字幕文件
-                        elif ext.lower() in SUBTITLE_EXTENSIONS:
-                            basename = os.path.splitext(item)[0]
-                            if basename not in valid_video_basenames:
-                                should_remove = True
-                                remove_reason = "孤立字幕文件"
-                        # 检查是否是无效的视频文件
-                        elif ext.lower() in VIDEO_EXTENSIONS:
-                            # 首先检查是否是电视剧文件，如果是则跳过删除
-                            if TV_SHOW_PATTERN.search(item):
-                                should_remove = False
-                                logging.info(f"跳过删除电视剧文件: {item_path}")
-                            else:
-                                try:
-                                    movie_name, year = extract_movie_info(item)
-                                    if year is None:
-                                        should_remove = True
-                                        remove_reason = "无效视频文件"
-                                except:
+                                if year is None:
                                     should_remove = True
                                     remove_reason = "无效视频文件"
-                        
-                        if should_remove:
-                            try:
-                                os.remove(item_path)
-                                logging.info(f"删除{remove_reason}: {item_path}")
-                                junk_files_removed += 1
-                            except Exception as e:
-                                logging.warning(f"删除文件失败: {item_path}, 错误: {e}")
-                
-                # 如果不保留根目录，尝试删除目录本身
-                if not preserve_root:
-                    try:
-                        os.rmdir(directory)
-                        logging.info(f"删除空目录: {directory}")
-                        return True
-                    except Exception as e:
-                        logging.warning(f"删除目录失败: {directory}, 错误: {e}")
-                        return False
-                else:
-                    # 保留根目录，但返回是否清理了垃圾文件
-                    return junk_files_removed > 0
+                            except:
+                                should_remove = True
+                                remove_reason = "无效视频文件"
+                    
+                    if should_remove:
+                        try:
+                            os.remove(item_path)
+                            logging.info(f"删除{remove_reason}: {item_path}")
+                            junk_files_removed += 1
+                        except Exception as e:
+                            logging.warning(f"删除文件失败: {item_path}, 错误: {e}")
+            
+            # 如果可以删除且不保留根目录，尝试删除目录本身
+            if can_remove and not preserve_root:
+                try:
+                    os.rmdir(directory)
+                    logging.info(f"删除空目录: {directory}")
+                    return True
+                except Exception as e:
+                    logging.warning(f"删除目录失败: {directory}, 错误: {e}")
+                    return False
+            else:
+                # 保留根目录或目录不能删除，但返回是否清理了垃圾文件
+                return junk_files_removed > 0
         
         return removed_count > 0
         
@@ -878,6 +919,11 @@ def process_directory(source_dir, target_base_dir, resolution=None, codec=None,
     failure_count = 0
     skipped_count = 0
     removed_dirs_count = 0
+    
+    # 首先检查源目录是否包含电视剧文件，如果包含则完全跳过处理
+    if contains_tv_show_files(source_dir):
+        logging.info(f"检测到电视剧目录，完全跳过处理: {source_dir}")
+        return success_count, failure_count, skipped_count, removed_dirs_count
     
     # 收集处理过的目录，用于后续检查是否可以删除
     processed_dirs = set()
