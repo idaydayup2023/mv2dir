@@ -64,7 +64,7 @@ YEAR_PATTERN = re.compile(r'[.\s\(\)\[\]](19[0-9]{2}|20[0-9]{2})(?=[.\s\(\)\[\]]
 # 2. 被括号包围的年份
 # 3. 位于文件名末尾的年份
 RELEASE_YEAR_PATTERNS = [
-    re.compile(r'[.\s\(\)\[\]](19[0-9]{2}|20[0-9]{2})(?=[.\s\(\)\[\]](BluRay|BDRip|BRRip|DVDRip|WEBRip|WEB-DL|HDRip|Directors|Cut|Extended|Unrated|REMUX|REPACK|PROPER|REAL))', re.IGNORECASE),
+    re.compile(r'[.\s\(\)\[\]](19[0-9]{2}|20[0-9]{2})(?=[.\s\(\)\[\]](BluRay|BDRip|BRRip|DVDRip|WEBRip|WEB-DL|HDRip|Directors|Cut|Extended|Unrated|REMASTERED|REMUX|REPACK|PROPER|REAL))', re.IGNORECASE),
     re.compile(r'[.\s\(\)\[\]](19[0-9]{2}|20[0-9]{2})(?=[.\s\(\)\[\]](\d+p|4K|8K|UHD|HD|x26[45]|H\.?26[45]|AVC|HEVC|VP9|AV1))', re.IGNORECASE),
     re.compile(r'[.\s\(\)\[\]](19[0-9]{2}|20[0-9]{2})(?=[.\s\(\)\[\]](Tagalog|Filipino|Pinoy|Adult|XXX))', re.IGNORECASE),  # 受限制关键词前的年份
     re.compile(r'\((19[0-9]{2}|20[0-9]{2})\)'),
